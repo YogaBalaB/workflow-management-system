@@ -234,9 +234,7 @@ const Dashboard = () => {
             </button>
           </div>
 
-          {remindersLoading ? (
-            <Loader size="small" style={{ margin: '20px auto' }} />
-          ) : reminders.length === 0 ? (
+          {reminders.length === 0 ? (
             <div style={s.emptyState}>
               <CheckCircle2 size={28} style={{ opacity: 0.3, color: '#059669' }} />
               <span style={s.emptyPrimary}>All caught up!</span>
@@ -268,8 +266,18 @@ const Dashboard = () => {
                     key={r.id}
                     style={s.reminderRow}
                     onClick={() => navigate(`/requests/${r.id}`)}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#fde68a'; e.currentTarget.style.background = '#fffbeb'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#fecaca'; e.currentTarget.style.background = '#fef2f2'; }}
+                    onMouseEnter={(e) => { 
+                      e.currentTarget.style.borderColor = '#fde68a'; 
+                      e.currentTarget.style.background = '#fffbeb';
+                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(217, 119, 6, 0.15)';
+                      e.currentTarget.style.transform = 'translateY(-2px)';
+                    }}
+                    onMouseLeave={(e) => { 
+                      e.currentTarget.style.borderColor = '#fecaca'; 
+                      e.currentTarget.style.background = '#fef2f2';
+                      e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.04)';
+                      e.currentTarget.style.transform = 'translateY(0)';
+                    }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
                       <div style={s.reminderIcon}><AlertTriangle size={12} color="#d97706" /></div>
@@ -295,6 +303,18 @@ const Dashboard = () => {
                     <button
                       style={s.actBtn}
                       onClick={(e) => { e.stopPropagation(); navigate(`/requests/${r.id}`); }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = '#f5f3ff';
+                        e.currentTarget.style.borderColor = '#c4b5fd';
+                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(109, 40, 217, 0.15)';
+                        e.currentTarget.style.transform = 'scale(1.05)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = '#fff';
+                        e.currentTarget.style.borderColor = '#e2e8f0';
+                        e.currentTarget.style.boxShadow = 'none';
+                        e.currentTarget.style.transform = 'scale(1)';
+                      }}
                     >
                       Review <ArrowRight size={11} />
                     </button>
@@ -485,13 +505,13 @@ const s = {
   reqPriority: { fontSize: '0.67rem', color: '#94a3b8' },
   reqTimestamp: { display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.65rem', color: '#94a3b8', marginTop: 4 },
   statusBadge: { padding: '3px 9px', borderRadius: 999, fontSize: '0.67rem', fontWeight: 500, border: '0.5px solid', whiteSpace: 'nowrap', flexShrink: 0 },
-  reminderRow: { display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 10, background: '#fef2f2', border: '0.5px solid #fecaca', cursor: 'pointer', transition: 'background 0.12s, border-color 0.12s' },
+  reminderRow: { display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 10, background: '#fef2f2', border: '0.5px solid #fecaca', cursor: 'pointer', transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)', transform: 'translateY(0)', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' },
   reminderHeaderCell: { flex: 1, fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#cbd5e1' },
   reminderIcon: { width: 26, height: 26, borderRadius: 7, flexShrink: 0, background: '#fffbeb', border: '0.5px solid #fde68a', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   reminderTitle: { fontSize: '0.8rem', fontWeight: 600, color: '#1e293b', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   reminderSub: { fontSize: '0.67rem', color: '#94a3b8', display: 'block' },
-  reminderBadge: { padding: '3px 9px', borderRadius: 999, fontSize: '0.67rem', fontWeight: 500, border: '0.5px solid', whiteSpace: 'nowrap', flexShrink: 0 },
-  actBtn: { display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 7, background: '#fff', border: '0.5px solid #e2e8f0', color: '#6d28d9', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' },
+  reminderBadge: { padding: '3px 9px', borderRadius: 999, fontSize: '0.67rem', fontWeight: 500, border: '0.5px solid', whiteSpace: 'nowrap', flexShrink: 0, transition: 'all 0.25s ease' },
+  actBtn: { display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 7, background: '#fff', border: '0.5px solid #e2e8f0', color: '#6d28d9', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap', transition: 'all 0.2s ease' },
 };
 
 export default Dashboard;
