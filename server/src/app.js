@@ -2,6 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import authRoutes from './routes/authRoutes.js';
 import requestRoutes from './routes/requestRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
+import { authMiddleware } from './middleware/authMiddleware.js';
+import { roleMiddleware } from './middleware/roleMiddleware.js';
 import { errorMiddleware } from './middleware/errorMiddleware.js';
 import { responseHandler } from './utils/responseHandler.js';
 
@@ -30,6 +33,7 @@ if (process.env.NODE_ENV === 'development') {
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/requests', requestRoutes);
+app.use('/api/admin', authMiddleware, roleMiddleware('Admin'), adminRoutes);
 
 // Base route / healthcheck
 app.get('/health', (req, res) => {

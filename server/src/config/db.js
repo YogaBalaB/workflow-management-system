@@ -77,6 +77,49 @@ export const query = async (text, params = []) => {
   }
 };
 
+const runSchemaUpdates = async () => {
+  try {
+    if (dbType === 'postgres') {
+      // 1. Add is_enabled column to users
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_enabled BOOLEAN DEFAULT TRUE;`);
+
+      // 1.5 Add assigned_manager_id column to requests
+      await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS assigned_manager_id UUID REFERENCES users(id) ON DELETE SET NULL;`);
+
+      // 2. Create settings table
+      await pool.query(`CREATE TABLE IF NOT EXISTS settings (key VARCHAR(100) PRIMARY KEY, value VARCHAR(255) NOT NULL);`);
+
+      // 3. Seed response_time_limit
+      await pool.query(`INSERT INTO settings (key, value) VALUES ('response_time_limit', '10') ON CONFLICT (key) DO NOTHING;`);
+
+      console.log('🔄 DB: PostgreSQL schema updates executed successfully.');
+    } else {
+      // SQLite: Add column
+      try {
+        sqliteDb.exec(`ALTER TABLE users ADD COLUMN is_enabled BOOLEAN DEFAULT 1;`);
+      } catch (err) {
+        // Column probably already exists, which is fine
+      }
+
+      try {
+        sqliteDb.exec(`ALTER TABLE requests ADD COLUMN assigned_manager_id TEXT REFERENCES users(id) ON DELETE SET NULL;`);
+      } catch (err) {
+        // Column probably already exists, which is fine
+      }
+
+      // Patch any existing rows that have NULL is_enabled (e.g. from old seeds)
+      sqliteDb.exec(`UPDATE users SET is_enabled = 1 WHERE is_enabled IS NULL;`);
+
+      sqliteDb.exec(`CREATE TABLE IF NOT EXISTS settings (key VARCHAR(100) PRIMARY KEY, value VARCHAR(255) NOT NULL);`);
+      sqliteDb.exec(`INSERT OR IGNORE INTO settings (key, value) VALUES ('response_time_limit', '10');`);
+
+      console.log('🔄 DB: SQLite schema updates executed successfully.');
+    }
+  } catch (err) {
+    console.error('⚠️ DB: Failed to run schema updates:', err.message);
+  }
+};
+
 /**
  * Initialize the database. For SQLite, this will run migrations and seed data automatically.
  */
@@ -86,6 +129,7 @@ export const initDb = async () => {
       // Test PostgreSQL connection
       await pool.query('SELECT 1');
       console.log('✅ DB: PostgreSQL connection verified successfully.');
+      await runSchemaUpdates();
       return;
     } catch (err) {
       console.warn('⚠️ DB: Failed to connect to PostgreSQL. Falling back to native SQLite. Error:', err.message);
@@ -107,6 +151,7 @@ export const initDb = async () => {
 
     if (tables.length > 0) {
       console.log('✅ DB: SQLite tables already exist. Skipping seed.');
+      await runSchemaUpdates();
       return;
     }
 

@@ -12,6 +12,7 @@ CREATE TABLE users (
     email VARCHAR(255) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
     role VARCHAR(20) NOT NULL CHECK (role IN ('User', 'Manager', 'Admin')),
+    is_enabled BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -24,6 +25,7 @@ CREATE TABLE requests (
     priority VARCHAR(20) NOT NULL CHECK (priority IN ('Low', 'Medium', 'High')),
     status VARCHAR(50) NOT NULL DEFAULT 'Submitted' CHECK (status IN ('Submitted', 'Approved', 'Rejected', 'Needs Clarification', 'Closed', 'Reopened')),
     created_by UUID REFERENCES users(id) ON DELETE CASCADE,
+    assigned_manager_id UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -36,6 +38,12 @@ CREATE TABLE request_history (
     comments TEXT,
     updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Settings Table (for Admin configuration)
+CREATE TABLE settings (
+    key VARCHAR(100) PRIMARY KEY,
+    value VARCHAR(255) NOT NULL
 );
 
 -- Create Indexes for optimization

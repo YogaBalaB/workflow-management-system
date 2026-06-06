@@ -14,6 +14,9 @@ const Sidebar = () => {
   if (isUser) {
     navItems.push({ to: '/requests/new', label: 'Submit Request', icon: PlusCircle });
   }
+  if (user?.role === 'Admin') {
+    navItems.push({ to: '/admin', label: 'Admin Console', icon: ShieldCheck });
+  }
 
   return (
     <aside style={s.aside}>

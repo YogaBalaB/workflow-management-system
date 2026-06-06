@@ -18,6 +18,11 @@ export const authController = {
         return responseHandler.error(res, 'Invalid email or password.', null, 401);
       }
 
+      // 1.5 Check if user account is disabled
+      if (user.is_enabled === false || user.is_enabled === 0) {
+        return responseHandler.error(res, 'Access denied. Your account is disabled. Please contact the administrator.', null, 403);
+      }
+
       // 2. Validate password
       const isMatch = await comparePassword(password, user.password);
       if (!isMatch) {

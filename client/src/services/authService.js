@@ -1,63 +1,70 @@
 import { api } from './api.js';
 
 export const authService = {
-  /**
-   * Login credentials and store JWT token
-   * Returns { token, user: { id, name, email, role } }
-   */
   async login(email, password) {
     const data = await api.post('/auth/login', { email, password });
-    if (data.token) {
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
+    if (data.token && data.user && data.user.role) {
+      const role = data.user.role;
+      // token_* and user_* stay in localStorage (role-keyed, safe to share across tabs)
+      localStorage.setItem(`token_${role}`, data.token);
+      localStorage.setItem(`user_${role}`, JSON.stringify(data.user));
+      // activeRole goes in sessionStorage — per-tab, never bleeds into other tabs
+      sessionStorage.setItem('activeRole', role);
     }
     return data;
   },
 
-  /**
-   * Register a new account
-   * Returns { token, user: { id, name, email, role } }
-   */
   async register(name, email, password, role) {
     const data = await api.post('/auth/register', { name, email, password, role });
-    if (data.token) {
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
+    if (data.token && data.user && data.user.role) {
+      const uRole = data.user.role;
+      localStorage.setItem(`token_${uRole}`, data.token);
+      localStorage.setItem(`user_${uRole}`, JSON.stringify(data.user));
+      sessionStorage.setItem('activeRole', uRole);
     }
     return data;
   },
 
-  /**
-   * Log out active user session and purge localStorage keys
-   */
-  logout() {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+  logout(role) {
+    const target = role || sessionStorage.getItem('activeRole');
+    if (target) {
+      localStorage.removeItem(`token_${target}`);
+      localStorage.removeItem(`user_${target}`);
+      sessionStorage.removeItem('activeRole');
+    }
   },
 
-  /**
-   * Fetch details of currently logged-in user profile
-   */
   async getProfile() {
     return api.get('/auth/me');
   },
 
-  /**
-   * Get cached user from localStorage (safely handles missing values)
-   */
   getCurrentUser() {
     try {
-      const user = localStorage.getItem('user');
+      const activeRole = sessionStorage.getItem('activeRole');
+      if (!activeRole) return null;
+      const user = localStorage.getItem(`user_${activeRole}`);
       return user ? JSON.parse(user) : null;
     } catch {
       return null;
     }
   },
 
-  /**
-   * Check if user session exists (has token stored)
-   */
   isAuthenticated() {
-    return !!localStorage.getItem('token');
+    const activeRole = sessionStorage.getItem('activeRole');
+    if (!activeRole) return false;
+    return !!localStorage.getItem(`token_${activeRole}`);
+  },
+
+  hasSession(role) {
+    return !!localStorage.getItem(`token_${role}`);
+  },
+
+  getUserByRole(role) {
+    try {
+      const user = localStorage.getItem(`user_${role}`);
+      return user ? JSON.parse(user) : null;
+    } catch {
+      return null;
+    }
   }
 };

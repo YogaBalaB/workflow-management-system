@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth.js';
 import { requestService } from '../../services/requestService.js';
-import { CATEGORIES, STATES, PRIORITIES, PRIORITY_STYLES } from '../../utils/constants.js';
+import { formatTimestamp } from '../../utils/dateUtils.js';
+import { CATEGORIES, STATES, PRIORITIES } from '../../utils/constants.js';
 import { Search, ChevronLeft, ChevronRight, Eye, PlusCircle, SlidersHorizontal, RotateCcw } from 'lucide-react';
 import Loader from '../../components/common/Loader.jsx';
 import StatusBadge from '../../components/requests/StatusBadge.jsx';
@@ -27,8 +28,9 @@ const RequestList = () => {
   const [priorityFilter, setPriorityFilter] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 8;
+  const REQUEST_LIST_POLL_MS = 5_000;
 
-  const fetchRequests = async (overrides = {}) => {
+  const fetchRequests = useCallback(async (overrides = {}, resetPage = false) => {
     try {
       setLoading(true);
       setError('');
@@ -37,21 +39,37 @@ const RequestList = () => {
         ...overrides,
       });
       setRequests(data);
-      setCurrentPage(1);
+      if (resetPage) {
+        setCurrentPage(1);
+      }
     } catch (err) {
       setError('Could not retrieve requests. Please check connection and try again.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [search, statusFilter, categoryFilter, priorityFilter]);
 
-  useEffect(() => { fetchRequests(); }, [statusFilter, categoryFilter, priorityFilter]);
+  useEffect(() => { fetchRequests({}, true); }, [fetchRequests]);
 
-  const handleSearchSubmit = (e) => { e.preventDefault(); fetchRequests(); };
+  useEffect(() => {
+    const interval = setInterval(() => fetchRequests(), REQUEST_LIST_POLL_MS);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchRequests();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [fetchRequests]);
+
+  const handleSearchSubmit = (e) => { e.preventDefault(); fetchRequests({}, true); };
 
   const handleReset = () => {
     setSearch(''); setStatusFilter(''); setCategoryFilter(''); setPriorityFilter('');
-    requestService.getRequests({}).then(setRequests).catch(console.error);
+    fetchRequests({ search: '', status: '', category: '', priority: '' }, true);
   };
 
   const total = requests.length;
@@ -200,7 +218,7 @@ const RequestList = () => {
                         <td style={{ ...s.td, color: '#475569', fontSize: '0.8rem' }}>{req.creator_name}</td>
                       )}
                       <td style={{ ...s.td, color: '#94a3b8', fontSize: '0.78rem' }}>
-                        {new Date(req.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                        {formatTimestamp(req.created_at)}
                       </td>
                       <td style={{ ...s.td, textAlign: 'center' }}>
                         <StatusBadge status={req.status} glow={false} />

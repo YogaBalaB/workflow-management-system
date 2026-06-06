@@ -13,6 +13,9 @@ router.use(authMiddleware);
 // Get dashboard statistics (Placed before /:id)
 router.get('/stats', requestController.getDashboardStats);
 
+// Get timed-out pending requests for Manager dashboard
+router.get('/reminders', roleMiddleware('Manager'), requestController.getRequestReminders);
+
 // Get all requests scoped to role
 router.get('/', requestController.getRequests);
 

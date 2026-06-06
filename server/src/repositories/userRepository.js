@@ -24,9 +24,9 @@ export const userRepository = {
    */
   async create({ id, name, email, password, role }) {
     const sql = `
-      INSERT INTO users (id, name, email, password, role)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, name, email, role, created_at
+      INSERT INTO users (id, name, email, password, role, is_enabled)
+      VALUES ($1, $2, $3, $4, $5, 1)
+      RETURNING id, name, email, role, is_enabled, created_at
     `;
     const result = await query(sql, [id, name, email, password, role]);
     return result.rows[0];

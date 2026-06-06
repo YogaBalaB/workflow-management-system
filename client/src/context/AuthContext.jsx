@@ -8,28 +8,64 @@ export const AuthProvider = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Sync state on load
-  useEffect(() => {
-    const cachedUser = authService.getCurrentUser();
-    const authenticated = authService.isAuthenticated();
+  const syncState = () => {
+    // FIX: reads activeRole from sessionStorage — per-tab, never affected by other tabs
+    const activeRole = sessionStorage.getItem('activeRole');
+    if (!activeRole) {
+      setUser(null);
+      setIsAuthenticated(false);
+      setLoading(false);
+      return;
+    }
 
-    if (cachedUser && authenticated) {
-      setUser(cachedUser);
+    const token = localStorage.getItem(`token_${activeRole}`);
+    const rawUser = localStorage.getItem(`user_${activeRole}`);
+
+    if (!token || !rawUser) {
+      sessionStorage.removeItem('activeRole');
+      setUser(null);
+      setIsAuthenticated(false);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(rawUser);
+      if (parsed.role !== activeRole) {
+        sessionStorage.removeItem('activeRole');
+        setUser(null);
+        setIsAuthenticated(false);
+        setLoading(false);
+        return;
+      }
+      setUser(parsed);
       setIsAuthenticated(true);
-      
-      // Verify token/get fresh profile in background
+    } catch {
+      sessionStorage.removeItem('activeRole');
+      setUser(null);
+      setIsAuthenticated(false);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    syncState();
+
+    const activeRole = sessionStorage.getItem('activeRole');
+    const token = activeRole ? localStorage.getItem(`token_${activeRole}`) : null;
+
+    if (activeRole && token) {
       authService.getProfile()
         .then((freshUser) => {
-          setUser(freshUser);
-          localStorage.setItem('user', JSON.stringify(freshUser));
+          if (freshUser.role === activeRole) {
+            setUser(freshUser);
+            localStorage.setItem(`user_${activeRole}`, JSON.stringify(freshUser));
+          }
         })
         .catch((err) => {
           console.warn('Session verification failed, logging out:', err);
           handleLogout();
-        })
-        .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
+        });
     }
   }, []);
 
@@ -37,14 +73,11 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     try {
       const data = await authService.login(email, password);
-      setUser(data.user);
-      setIsAuthenticated(true);
+      syncState();
       return data.user;
     } catch (err) {
-      handleLogout();
-      throw err;
-    } finally {
       setLoading(false);
+      throw err;
     }
   };
 
@@ -52,21 +85,29 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     try {
       const data = await authService.register(name, email, password, role);
-      setUser(data.user);
-      setIsAuthenticated(true);
+      syncState();
       return data.user;
     } catch (err) {
-      handleLogout();
-      throw err;
-    } finally {
       setLoading(false);
+      throw err;
     }
   };
 
   const handleLogout = () => {
-    authService.logout();
+    const activeRole = sessionStorage.getItem('activeRole');
+    localStorage.removeItem(`user_${activeRole}`);
+    localStorage.removeItem(`token_${activeRole}`);
+    sessionStorage.removeItem('activeRole');
     setUser(null);
     setIsAuthenticated(false);
+    window.location.href = '/login';
+  };
+
+  const switchRole = (role) => {
+    if (authService.hasSession(role)) {
+      sessionStorage.setItem('activeRole', role);
+      syncState();
+    }
   };
 
   const value = {
@@ -75,7 +116,10 @@ export const AuthProvider = ({ children }) => {
     loading,
     login: handleLogin,
     register: handleRegister,
-    logout: handleLogout
+    logout: handleLogout,
+    switchRole,
+    hasSessionFor: (role) => authService.hasSession(role),
+    getUserByRole: (role) => authService.getUserByRole(role),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

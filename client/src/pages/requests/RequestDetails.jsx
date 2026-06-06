@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth.js';
 import { requestService } from '../../services/requestService.js';
+import { formatTimestamp } from '../../utils/dateUtils.js';
 import { STATES } from '../../utils/constants.js';
 import {
   ArrowLeft, Calendar, User as UserIcon, Tag,
@@ -18,6 +19,8 @@ const PRIO = {
   Medium: { color: '#b45309', bg: '#fffbeb', border: '#fde68a' },
   Low: { color: '#166534', bg: '#f0fdf4', border: '#bbf7d0' },
 };
+
+const REQUEST_DETAIL_POLL_MS = 5_000;
 
 /* ── timeline dot colour per status ── */
 const dotColor = (status) => ({
@@ -41,9 +44,10 @@ const RequestDetails = () => {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionSuccess, setActionSuccess] = useState('');
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
-      setLoading(true); setError('');
+      setLoading(true);
+      setError('');
       const data = await requestService.getRequestById(id);
       setRequest(data);
       setHistory(data.history || []);
@@ -52,13 +56,33 @@ const RequestDetails = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const interval = setInterval(load, REQUEST_DETAIL_POLL_MS);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [load]);
 
   const handleTransition = async (nextStatus) => {
     setActionLoading(true); setError(''); setActionSuccess('');
     try {
+      const latest = await requestService.getRequestById(id);
+      if (latest?.status !== request?.status || latest?.assigned_manager_id !== request?.assigned_manager_id) {
+        setRequest(latest);
+        setHistory(latest.history || []);
+        setError('This request was already updated by another manager.');
+        return;
+      }
+
       await requestService.updateRequestStatus(id, nextStatus, comments);
       setActionSuccess(`Request successfully updated to '${nextStatus}'.`);
       setComments('');
@@ -82,11 +106,20 @@ const RequestDetails = () => {
 
   const currentStatus = request?.status;
   const isCreator = request?.created_by === user?.id;
-  const showManagerActions = user?.role === 'Manager' && (currentStatus === STATES.SUBMITTED || currentStatus === STATES.REOPENED);
+  const canClaimRequest = request?.assigned_manager_id
+    ? request?.assigned_manager_id === user?.id
+    : request?.managerClaimAllowed !== false;
+  const showManagerActions = user?.role === 'Manager' &&
+    (currentStatus === STATES.SUBMITTED || currentStatus === STATES.REOPENED) &&
+    canClaimRequest;
+  const showManagerClaimBlocked = user?.role === 'Manager' &&
+    (currentStatus === STATES.SUBMITTED || currentStatus === STATES.REOPENED) &&
+    !request?.assigned_manager_id &&
+    request?.managerClaimAllowed === false;
   const showUserAction = isCreator && user?.role === 'User' && currentStatus === STATES.NEEDS_CLARIFICATION;
   const showAdminClose = user?.role === 'Admin' && currentStatus === STATES.APPROVED;
   const showAdminReopen = user?.role === 'Admin' && currentStatus === STATES.CLOSED;
-  const hasActions = showManagerActions || showUserAction || showAdminClose || showAdminReopen;
+  const hasActions = showManagerActions || showManagerClaimBlocked || showUserAction || showAdminClose || showAdminReopen;
 
   const prio = PRIO[request?.priority] || PRIO.Low;
 
@@ -139,12 +172,26 @@ const RequestDetails = () => {
               <span style={{ color: '#94a3b8' }}>({request?.creator_email})</span>
             </MetaRow>
 
+            {/* FIX Issue 2: Use formatTimestamp with seconds */}
             <MetaRow icon={<Calendar size={15} style={{ color: '#6d28d9' }} />} label="Submitted On">
-              {new Date(request?.created_at).toLocaleString(undefined, {
-                month: 'short', day: 'numeric', year: 'numeric',
-                hour: '2-digit', minute: '2-digit',
-              })}
+              {formatTimestamp(request?.created_at)}
             </MetaRow>
+
+            {request?.assigned_manager_name && (
+              <MetaRow icon={<UserIcon size={15} style={{ color: '#059669' }} />} label="Assigned Manager">
+                {request?.assigned_manager_name}
+              </MetaRow>
+            )}
+
+            {user?.role === 'Manager' && !request?.assigned_manager_id && (
+              <MetaRow icon={<UserIcon size={15} style={{ color: '#d97706' }} />} label="Assigned Manager">
+                {request?.managerClaimAllowed === false ? (
+                  <span style={{ color: '#b45309', fontWeight: 600 }}>Unassigned (Ineligible for claim: pending before your account was created)</span>
+                ) : (
+                  <span style={{ color: '#d97706', fontWeight: 600 }}>Unassigned (Opening claims this)</span>
+                )}
+              </MetaRow>
+            )}
           </div>
 
           {/* Description */}
@@ -169,6 +216,11 @@ const RequestDetails = () => {
                 </div>
               </div>
 
+              {showManagerClaimBlocked && (
+                <div style={s.infoBox}>
+                  This request became pending before your manager account was created, so it cannot be claimed or actioned yet.
+                </div>
+              )}
               {/* Comments textarea */}
               <div style={s.fieldGroup}>
                 <label style={s.label}>Comments / Rationale</label>
@@ -254,11 +306,9 @@ const RequestDetails = () => {
                             by {log.updater_name} ({log.updater_role})
                           </span>
                         </div>
+                        {/* FIX Issue 2: Use formatTimestamp with seconds in history timeline */}
                         <span style={{ fontSize: '0.68rem', color: '#94a3b8', whiteSpace: 'nowrap', marginTop: 2 }}>
-                          {new Date(log.created_at).toLocaleString(undefined, {
-                            month: 'short', day: 'numeric',
-                            hour: '2-digit', minute: '2-digit',
-                          })}
+                          {formatTimestamp(log.created_at)}
                         </span>
                       </div>
 
@@ -352,6 +402,15 @@ const s = {
   },
 
   metaList: { display: 'flex', flexDirection: 'column', gap: 16 },
+  infoBox: {
+    padding: '14px 16px',
+    borderRadius: 12,
+    background: '#fff7ed',
+    border: '0.5px solid #fde68a',
+    color: '#92400e',
+    fontSize: '0.88rem',
+    lineHeight: 1.5,
+  },
 
   prioBadge: {
     display: 'inline-block', padding: '2px 8px', borderRadius: 999,

@@ -6,6 +6,7 @@ import Dashboard from '../pages/dashboard/Dashboard.jsx';
 import RequestList from '../pages/requests/RequestList.jsx';
 import RequestDetails from '../pages/requests/RequestDetails.jsx';
 import CreateRequest from '../pages/requests/CreateRequest.jsx';
+import AdminConsole from '../pages/admin/AdminConsole.jsx';
 import NotFound from '../pages/errors/NotFound.jsx';
 import Unauthorized from '../pages/errors/Unauthorized.jsx';
 
@@ -26,6 +27,11 @@ const AppRoutes = () => {
       {/* Scoped Protected Routes: Submit Request is for Users only */}
       <Route element={<ProtectedRoute allowedRoles={['User']} />}>
         <Route path="/requests/new" element={<CreateRequest />} />
+      </Route>
+
+      {/* Scoped Protected Routes: Admin Console is for Admins only */}
+      <Route element={<ProtectedRoute allowedRoles={['Admin']} />}>
+        <Route path="/admin" element={<AdminConsole />} />
       </Route>
 
       {/* Error and Fallback Screens */}

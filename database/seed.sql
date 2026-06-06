@@ -8,12 +8,12 @@ DELETE FROM request_history;
 DELETE FROM requests;
 DELETE FROM users;
 
--- 1. Insert Users
-INSERT INTO users (id, name, email, password, role, created_at) VALUES
-('11111111-1111-1111-1111-111111111111', 'Alice', 'user@test.com', '$2a$10$fkelEELp/9fhqcNwewuFpeSZ95RWAyVz03yajbyC76rJMeJdzv7Ha', 'User', CURRENT_TIMESTAMP - INTERVAL '10 day'),
-('22222222-2222-2222-2222-222222222222', 'Bob', 'manager@test.com', '$2a$10$fkelEELp/9fhqcNwewuFpeSZ95RWAyVz03yajbyC76rJMeJdzv7Ha', 'Manager', CURRENT_TIMESTAMP - INTERVAL '10 day'),
-('33333333-3333-3333-3333-333333333333', 'Charlie', 'admin@test.com', '$2a$10$fkelEELp/9fhqcNwewuFpeSZ95RWAyVz03yajbyC76rJMeJdzv7Ha', 'Admin', CURRENT_TIMESTAMP - INTERVAL '10 day'),
-('44444444-4444-4444-4444-444444444444', 'Diana', 'diana@test.com', '$2a$10$fkelEELp/9fhqcNwewuFpeSZ95RWAyVz03yajbyC76rJMeJdzv7Ha', 'User', CURRENT_TIMESTAMP - INTERVAL '5 day');
+-- 1. Insert Users (is_enabled=1 means active/enabled)
+INSERT INTO users (id, name, email, password, role, is_enabled, created_at) VALUES
+('11111111-1111-1111-1111-111111111111', 'Alice', 'user@test.com', '$2a$10$fkelEELp/9fhqcNwewuFpeSZ95RWAyVz03yajbyC76rJMeJdzv7Ha', 'User', 1, CURRENT_TIMESTAMP - INTERVAL '10 day'),
+('22222222-2222-2222-2222-222222222222', 'Bob', 'manager@test.com', '$2a$10$fkelEELp/9fhqcNwewuFpeSZ95RWAyVz03yajbyC76rJMeJdzv7Ha', 'Manager', 1, CURRENT_TIMESTAMP - INTERVAL '10 day'),
+('33333333-3333-3333-3333-333333333333', 'Charlie', 'admin@test.com', '$2a$10$fkelEELp/9fhqcNwewuFpeSZ95RWAyVz03yajbyC76rJMeJdzv7Ha', 'Admin', 1, CURRENT_TIMESTAMP - INTERVAL '10 day'),
+('44444444-4444-4444-4444-444444444444', 'Diana', 'diana@test.com', '$2a$10$fkelEELp/9fhqcNwewuFpeSZ95RWAyVz03yajbyC76rJMeJdzv7Ha', 'User', 1, CURRENT_TIMESTAMP - INTERVAL '5 day');
 
 -- 2. Insert Requests
 INSERT INTO requests (id, title, description, category, priority, status, created_by, created_at) VALUES

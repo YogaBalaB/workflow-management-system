@@ -43,7 +43,7 @@ const Navbar = () => {
             <div style={s.divider} />
           </div>
         )}
-        <button style={s.signOutBtn} onClick={logout}
+        <button style={s.signOutBtn} onClick={() => logout(user?.role)}
           onMouseEnter={e => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.borderColor = '#fecaca'; e.currentTarget.style.color = '#b91c1c'; }}
           onMouseLeave={e => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.color = '#64748b'; }}
         >

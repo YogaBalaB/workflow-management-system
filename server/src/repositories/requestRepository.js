@@ -19,9 +19,10 @@ export const requestRepository = {
    */
   async findById(id) {
     const sql = `
-      SELECT r.*, u.name as creator_name, u.email as creator_email 
+      SELECT r.*, u.name as creator_name, u.email as creator_email, m.name as assigned_manager_name 
       FROM requests r
       JOIN users u ON r.created_by = u.id
+      LEFT JOIN users m ON r.assigned_manager_id = m.id
       WHERE r.id = $1 LIMIT 1
     `;
     const result = await query(sql, [id]);
@@ -29,9 +30,26 @@ export const requestRepository = {
   },
 
   /**
+   * Atomically claim a request for a manager — only succeeds if still unassigned.
+   * Returns the updated row if claim succeeded, or null if another manager already claimed it.
+   * This prevents race conditions when multiple managers open the same request simultaneously.
+   */
+  async assign(id, managerId) {
+    const sql = `
+      UPDATE requests
+      SET assigned_manager_id = $1
+      WHERE id = $2
+        AND assigned_manager_id IS NULL
+      RETURNING *
+    `;
+    const result = await query(sql, [managerId, id]);
+    return result.rows[0] || null;
+  },
+
+  /**
    * Find all requests based on user role and apply filters
    */
-  async findAll({ role, userId, search, status, category, priority }) {
+  async findAll({ role, userId, userCreatedAt, search, status, category, priority }) {
     let sql = `
       SELECT r.*, u.name as creator_name, u.email as creator_email
       FROM requests r
@@ -47,20 +65,25 @@ export const requestRepository = {
       params.push(userId);
       paramIndex++;
     } else if (role === 'Manager') {
-      // In the PRD it says "Manager: View all pending requests". We will allow viewing all,
-      // but let them easily filter. To strictly respect FR-3: if status filter is not specified, 
-      // we can optionally default or let them view all. Showing all requests in the list is 
-      // standard for tracking, so we support all filters.
+      sql += ` AND (
+        r.assigned_manager_id = $${paramIndex}
+        OR r.status NOT IN ('Submitted', 'Reopened')
+        OR (
+          r.assigned_manager_id IS NULL
+          AND r.status IN ('Submitted', 'Reopened')
+          AND COALESCE(
+            (SELECT created_at FROM request_history WHERE request_id = r.id AND new_status = r.status ORDER BY created_at DESC LIMIT 1),
+            r.created_at
+          ) >= $${paramIndex + 1}
+        )
+      )`;
+      params.push(userId, userCreatedAt);
+      paramIndex += 2;
     }
 
     // 2. Search filter (title / description)
     if (search) {
-      sql += ` AND (r.title ILIKE $${paramIndex} OR r.description ILIKE $${paramIndex})`;
-      // For SQLite, ILIKE is not case sensitive by default using LIKE, 
-      // but standard postgres supports ILIKE. In SQLite, ILIKE is parsed or fallback to LIKE.
-      // To support both, we'll use standard lower() comparison which works on both!
-      sql = sql.replace(`r.title ILIKE $${paramIndex} OR r.description ILIKE $${paramIndex}`, 
-                        `LOWER(r.title) LIKE LOWER($${paramIndex}) OR LOWER(r.description) LIKE LOWER($${paramIndex})`);
+      sql += ` AND (LOWER(r.title) LIKE LOWER($${paramIndex}) OR LOWER(r.description) LIKE LOWER($${paramIndex}))`;
       params.push(`%${search}%`);
       paramIndex++;
     }
@@ -108,19 +131,19 @@ export const requestRepository = {
   },
 
   /**
-   * Get basic stats for dashboard dashboard metrics
+   * Get basic stats for dashboard metrics
    */
   async getStats(role, userId) {
     let sql = 'SELECT status, COUNT(*) as count FROM requests';
     const params = [];
-    
+
     if (role === 'User') {
       sql += ' WHERE created_by = $1';
       params.push(userId);
     }
-    
+
     sql += ' GROUP BY status';
-    
+
     const result = await query(sql, params);
     return result.rows;
   }

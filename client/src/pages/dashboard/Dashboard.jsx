@@ -1,26 +1,28 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth.js';
 import { requestService } from '../../services/requestService.js';
+import { adminService } from '../../services/adminService.js';
+import { formatTimestamp } from '../../utils/dateUtils.js';
 import {
-  ClipboardList,
-  Clock,
-  CheckCircle2,
-  XCircle,
-  LockKeyhole,
-  HelpCircle,
-  PlusCircle,
-  ArrowRight,
-  TrendingUp,
-  Activity,
-  Zap,
-  RefreshCw,
+  ClipboardList, Clock, CheckCircle2, XCircle, LockKeyhole,
+  HelpCircle, PlusCircle, ArrowRight, TrendingUp, Activity,
+  Zap, RefreshCw, Bell, AlertTriangle, Calendar,
 } from 'lucide-react';
 import Loader from '../../components/common/Loader.jsx';
 import Button from '../../components/common/Button.jsx';
 import StatusBadge from '../../components/requests/StatusBadge.jsx';
 
-/* ─── design tokens ──────────────────────────────────────────── */
+// ─────────────────────────────────────────────────────────────────────────────
+// POLLING INTERVALS
+// Dashboard stats + recent activity re-fetch every 5 s so managers see
+// status changes made by a peer without manual refresh.
+// Reminders re-fetch every 5 s because the SLA window can be as small as
+// 10 s during testing (Issue 1 + Issue 3).
+// ─────────────────────────────────────────────────────────────────────────────
+const DASHBOARD_POLL_MS = 5_000;
+const REMINDERS_POLL_MS = 5_000;
+
 const role = {
   User: { accent: '#6d28d9', light: '#f5f3ff', border: '#c4b5fd', pill: '#ede9fe', pillText: '#5b21b6' },
   Manager: { accent: '#059669', light: '#ecfdf5', border: '#a7f3d0', pill: '#d1fae5', pillText: '#065f46' },
@@ -28,60 +30,12 @@ const role = {
 };
 
 const cardConfig = (stats) => [
-  {
-    title: 'Total Requests',
-    value: stats?.Total || 0,
-    icon: ClipboardList,
-    iconColor: '#6d28d9',
-    iconBg: '#f5f3ff',
-    iconBorder: '#c4b5fd',
-    valueColor: '#1e1b4b',
-  },
-  {
-    title: 'Pending Review',
-    value: (stats?.Submitted || 0) + (stats?.Reopened || 0),
-    icon: Clock,
-    iconColor: '#2563eb',
-    iconBg: '#eff6ff',
-    iconBorder: '#bfdbfe',
-    valueColor: '#1e3a8a',
-  },
-  {
-    title: 'Needs Action',
-    value: stats?.['Needs Clarification'] || 0,
-    icon: HelpCircle,
-    iconColor: '#d97706',
-    iconBg: '#fffbeb',
-    iconBorder: '#fde68a',
-    valueColor: '#78350f',
-  },
-  {
-    title: 'Approved',
-    value: stats?.Approved || 0,
-    icon: CheckCircle2,
-    iconColor: '#059669',
-    iconBg: '#ecfdf5',
-    iconBorder: '#a7f3d0',
-    valueColor: '#064e3b',
-  },
-  {
-    title: 'Rejected',
-    value: stats?.Rejected || 0,
-    icon: XCircle,
-    iconColor: '#dc2626',
-    iconBg: '#fef2f2',
-    iconBorder: '#fecaca',
-    valueColor: '#7f1d1d',
-  },
-  {
-    title: 'Closed Out',
-    value: stats?.Closed || 0,
-    icon: LockKeyhole,
-    iconColor: '#64748b',
-    iconBg: '#f8fafc',
-    iconBorder: '#e2e8f0',
-    valueColor: '#334155',
-  },
+  { title: 'Total Requests', value: stats?.Total || 0, icon: ClipboardList, iconColor: '#6d28d9', iconBg: '#f5f3ff', iconBorder: '#c4b5fd', valueColor: '#1e1b4b' },
+  { title: 'Pending Review', value: (stats?.Submitted || 0) + (stats?.Reopened || 0), icon: Clock, iconColor: '#2563eb', iconBg: '#eff6ff', iconBorder: '#bfdbfe', valueColor: '#1e3a8a' },
+  { title: 'Needs Action', value: stats?.['Needs Clarification'] || 0, icon: HelpCircle, iconColor: '#d97706', iconBg: '#fffbeb', iconBorder: '#fde68a', valueColor: '#78350f' },
+  { title: 'Approved', value: stats?.Approved || 0, icon: CheckCircle2, iconColor: '#059669', iconBg: '#ecfdf5', iconBorder: '#a7f3d0', valueColor: '#064e3b' },
+  { title: 'Rejected', value: stats?.Rejected || 0, icon: XCircle, iconColor: '#dc2626', iconBg: '#fef2f2', iconBorder: '#fecaca', valueColor: '#7f1d1d' },
+  { title: 'Closed Out', value: stats?.Closed || 0, icon: LockKeyhole, iconColor: '#64748b', iconBg: '#f8fafc', iconBorder: '#e2e8f0', valueColor: '#334155' },
 ];
 
 const barSegments = (stats) => [
@@ -99,7 +53,7 @@ const roleDescriptions = {
   Admin: 'Audit requests, close out finalised hardware transactions, or reopen closed request cases.',
 };
 
-/* ─── status badge colours ───────────────────────────────────── */
+
 const statusStyles = {
   Submitted: { bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' },
   Approved: { bg: '#ecfdf5', color: '#065f46', border: '#a7f3d0' },
@@ -109,7 +63,6 @@ const statusStyles = {
   Closed: { bg: '#f8fafc', color: '#475569', border: '#e2e8f0' },
 };
 
-/* ─── component ──────────────────────────────────────────────── */
 const Dashboard = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -119,22 +72,100 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const [reminders, setReminders] = useState([]);
+  const [remindersLoading, setRemindersLoading] = useState(false);
+
+  // ── Refs keep the latest state visible inside setInterval callbacks
+  // without causing the intervals to be re-created on every render (Issue 1)
+  const isMounted = useRef(true);
+  useEffect(() => {
+    isMounted.current = true;
+    return () => { isMounted.current = false; };
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FIX Issue 1: fetchReminders is stable (empty dep array on the callback)
+  // and is called both on mount and on a 10-second interval so every manager
+  // session picks up state changes made by a peer within at most 10 s.
+  // Tab-visibility handler still fires immediately on tab focus.
+  // ─────────────────────────────────────────────────────────────────────────
+  const fetchReminders = useCallback(async () => {
+    if (user?.role !== 'Manager') return;
+    setRemindersLoading(true);
+    try {
+      const data = await adminService.getReminders();
+      if (isMounted.current) {
+        setReminders(Array.isArray(data) ? data : []);
+      }
+    } catch {
+      /* silently ignore reminder errors */
+    } finally {
+      if (isMounted.current) setRemindersLoading(false);
+    }
+  }, [user?.role]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // FIX Issue 1: fetchDashboard is also polled on a 15-second interval so
+  // the "Recent Activity" feed and stat cards update automatically when
+  // another manager approves / rejects a request.
+  // ─────────────────────────────────────────────────────────────────────────
+  const fetchDashboard = useCallback(async () => {
+    try {
+      const statsData = await requestService.getDashboardStats();
+      const list = await requestService.getRequests();
+      if (isMounted.current) {
+        setStats(statsData);
+        setRecentRequests(list.slice(0, 5));
+      }
+    } catch (err) {
+      console.error('Failed to load dashboard:', err);
+      if (isMounted.current) {
+        setError('Error loading dashboard data. Please try again.');
+      }
+    }
+  }, []);
+
+  // Initial load — show full-page loader only on first mount
   useEffect(() => {
     (async () => {
-      try {
-        setLoading(true);
-        const statsData = await requestService.getDashboardStats();
-        setStats(statsData);
-        const list = await requestService.getRequests();
-        setRecentRequests(list.slice(0, 5));
-      } catch (err) {
-        console.error('Failed to load dashboard:', err);
-        setError('Error loading dashboard data. Please try again.');
-      } finally {
-        setLoading(false);
-      }
+      setLoading(true);
+      await fetchDashboard();
+      setLoading(false);
     })();
-  }, []);
+  }, [fetchDashboard]);
+
+  // ── Dashboard polling (Issue 1) ──────────────────────────────────────────
+  useEffect(() => {
+    const interval = setInterval(fetchDashboard, DASHBOARD_POLL_MS);
+
+    // Also re-fetch when tab regains focus — catches changes made while the
+    // tab was in the background
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') fetchDashboard();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [fetchDashboard]);
+
+  // ── Reminders polling (Issue 1 + Issue 3) ───────────────────────────────
+  useEffect(() => {
+    fetchReminders();
+    const interval = setInterval(fetchReminders, REMINDERS_POLL_MS);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') fetchReminders();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [fetchReminders]);
 
   if (loading) return <Loader size="large" style={{ marginTop: 80 }} />;
 
@@ -151,29 +182,18 @@ const Dashboard = () => {
   return (
     <div style={s.page}>
 
-      {/* ── Welcome Banner ──────────────────────────────────── */}
-      <div style={{
-        ...s.banner,
-        background: roleStyle.light,
-        borderColor: roleStyle.border,
-      }}>
-        {/* decorative blob */}
+      {/* ── Welcome Banner ── */}
+      <div style={{ ...s.banner, background: roleStyle.light, borderColor: roleStyle.border }}>
         <div style={{ ...s.blob, background: roleStyle.pill }} />
-
         <div style={s.bannerLeft}>
           <span style={{ ...s.rolePill, color: roleStyle.pillText, background: roleStyle.pill, borderColor: roleStyle.border }}>
-            <Zap size={10} />
-            {user?.role} Access
+            <Zap size={10} />{user?.role} Access
           </span>
-
           <h2 style={s.bannerTitle}>
-            Welcome back,{' '}
-            <span style={{ color: roleStyle.accent }}>{user?.name}</span>
+            Welcome back, <span style={{ color: roleStyle.accent }}>{user?.name}</span>
           </h2>
-
           <p style={s.bannerSub}>{roleDescriptions[user?.role]}</p>
         </div>
-
         <div style={{ position: 'relative', zIndex: 1, flexShrink: 0 }}>
           {isUser && (
             <Button variant="primary" onClick={() => navigate('/requests/new')} icon={PlusCircle}>
@@ -188,14 +208,105 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* ── Error ───────────────────────────────────────────── */}
-      {error && (
-        <div style={s.errorBox}>
-          ⚠️ {error}
+      {/* ── Error ── */}
+      {error && <div style={s.errorBox}>⚠️ {error}</div>}
+
+      {/* ── Manager Reminders ── */}
+      {isManager && (
+        <div style={s.panel}>
+          <div style={s.panelHeader}>
+            <div style={s.panelTitleGroup}>
+              <div style={{ ...s.panelIconBox, background: '#fffbeb', borderColor: '#fde68a' }}>
+                <Bell size={15} style={{ color: '#d97706' }} />
+              </div>
+              <div>
+                <h3 style={s.panelTitle}>Response Reminders</h3>
+                <span style={s.panelSub}>Pending requests that exceeded the SLA time limit</span>
+              </div>
+            </div>
+            <button
+              style={s.viewAllBtn}
+              onClick={fetchReminders}
+              onMouseEnter={(e) => { e.currentTarget.style.background = '#fffbeb'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
+            >
+              <RefreshCw size={13} /> Refresh
+            </button>
+          </div>
+
+          {remindersLoading ? (
+            <Loader size="small" style={{ margin: '20px auto' }} />
+          ) : reminders.length === 0 ? (
+            <div style={s.emptyState}>
+              <CheckCircle2 size={28} style={{ opacity: 0.3, color: '#059669' }} />
+              <span style={s.emptyPrimary}>All caught up!</span>
+              <span style={s.emptySub}>No pending requests have exceeded the response time limit.</span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ ...s.reminderRow, background: 'transparent', border: 'none', padding: '0 14px 4px', cursor: 'default' }}>
+                <span style={s.reminderHeaderCell}>Request</span>
+                <span style={s.reminderHeaderCell}>Priority</span>
+                <span style={s.reminderHeaderCell}>Status</span>
+                <span style={s.reminderHeaderCell}>Overdue By</span>
+                <span style={{ flex: 0, width: 80 }}></span>
+              </div>
+              {reminders.map((r) => {
+                const overSec = r.elapsedSeconds - r.limitSeconds;
+                const overLabel = overSec >= 3600
+                  ? `${Math.floor(overSec / 3600)}h ${Math.floor((overSec % 3600) / 60)}m`
+                  : overSec >= 60
+                    ? `${Math.floor(overSec / 60)}m ${overSec % 60}s`
+                    : `${overSec}s`;
+                const priColor = {
+                  High: { bg: '#fef2f2', color: '#991b1b', border: '#fecaca' },
+                  Medium: { bg: '#fffbeb', color: '#92400e', border: '#fde68a' },
+                  Low: { bg: '#f0fdf4', color: '#166534', border: '#bbf7d0' },
+                }[r.priority] || { bg: '#f8fafc', color: '#64748b', border: '#e2e8f0' };
+                return (
+                  <div
+                    key={r.id}
+                    style={s.reminderRow}
+                    onClick={() => navigate(`/requests/${r.id}`)}
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#fde68a'; e.currentTarget.style.background = '#fffbeb'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#fecaca'; e.currentTarget.style.background = '#fef2f2'; }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
+                      <div style={s.reminderIcon}><AlertTriangle size={12} color="#d97706" /></div>
+                      <div style={{ minWidth: 0 }}>
+                        <span style={s.reminderTitle}>{r.title}</span>
+                        <span style={s.reminderSub}>{r.creator_name} · {r.category}</span>
+                        {/* FIX Issue 2: formatDate now includes seconds */}
+                        <span style={{ ...s.reminderSub, display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                          <Calendar size={9} style={{ flexShrink: 0 }} />
+                          Submitted: {formatTimestamp(r.created_at)}
+                        </span>
+                      </div>
+                    </div>
+                    <span style={{ ...s.reminderBadge, background: priColor.bg, color: priColor.color, borderColor: priColor.border }}>
+                      {r.priority}
+                    </span>
+                    <span style={{ ...s.reminderBadge, background: '#eff6ff', color: '#1d4ed8', borderColor: '#bfdbfe' }}>
+                      {r.status}
+                    </span>
+                    <span style={{ ...s.reminderBadge, background: '#fef2f2', color: '#dc2626', borderColor: '#fecaca', fontWeight: 700 }}>
+                      +{overLabel}
+                    </span>
+                    <button
+                      style={s.actBtn}
+                      onClick={(e) => { e.stopPropagation(); navigate(`/requests/${r.id}`); }}
+                    >
+                      Review <ArrowRight size={11} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
-      {/* ── Stat Cards ──────────────────────────────────────── */}
+      {/* ── Stat Cards ── */}
       <div style={s.cardGrid}>
         {cards.map((card, idx) => {
           const Icon = card.icon;
@@ -216,10 +327,9 @@ const Dashboard = () => {
         })}
       </div>
 
-      {/* ── Bottom Two-Column ───────────────────────────────── */}
+      {/* ── Bottom Two-Column ── */}
       <div style={s.bottomGrid}>
 
-        {/* Status Breakdown */}
         <div style={s.panel}>
           <div style={s.panelHeader}>
             <div style={s.panelTitleGroup}>
@@ -233,7 +343,6 @@ const Dashboard = () => {
             </div>
             <span style={s.totalBadge}>{total} total</span>
           </div>
-
           {total === 0 ? (
             <div style={s.emptyState}>
               <Activity size={30} style={{ opacity: 0.3 }} />
@@ -242,18 +351,12 @@ const Dashboard = () => {
             </div>
           ) : (
             <>
-              {/* stacked bar */}
               <div style={s.stackedBar}>
                 {segments.map((seg) => (
-                  <div
-                    key={seg.key}
-                    title={`${seg.label}: ${getPct(seg.val)}%`}
-                    style={{ width: `${getPct(seg.val)}%`, background: seg.color, transition: 'width 0.4s ease' }}
-                  />
+                  <div key={seg.key} title={`${seg.label}: ${getPct(seg.val)}%`}
+                    style={{ width: `${getPct(seg.val)}%`, background: seg.color, transition: 'width 0.4s ease' }} />
                 ))}
               </div>
-
-              {/* legend */}
               <div style={s.legendGrid}>
                 {segments.map((seg) => (
                   <div key={seg.key} style={s.legendItem}>
@@ -269,7 +372,6 @@ const Dashboard = () => {
           )}
         </div>
 
-        {/* Recent Activity */}
         <div style={s.panel}>
           <div style={s.panelHeader}>
             <div style={s.panelTitleGroup}>
@@ -289,7 +391,6 @@ const Dashboard = () => {
               View All <ArrowRight size={13} />
             </button>
           </div>
-
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {recentRequests.length === 0 ? (
               <div style={s.emptyState}>
@@ -305,42 +406,27 @@ const Dashboard = () => {
               recentRequests.map((req, i) => {
                 const badge = statusStyles[req.status] || statusStyles.Closed;
                 return (
-                  <div
-                    key={req.id}
-                    onClick={() => navigate(`/requests/${req.id}`)}
-                    style={s.reqItem}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.background = '#f5f3ff';
-                      e.currentTarget.style.borderColor = '#c4b5fd';
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.background = '#f8fafc';
-                      e.currentTarget.style.borderColor = '#e2e8f0';
-                    }}
+                  <div key={req.id} onClick={() => navigate(`/requests/${req.id}`)} style={s.reqItem}
+                    onMouseEnter={e => { e.currentTarget.style.background = '#f5f3ff'; e.currentTarget.style.borderColor = '#c4b5fd'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = '#f8fafc'; e.currentTarget.style.borderColor = '#e2e8f0'; }}
                   >
-                    {/* index badge */}
                     <div style={s.reqNum}>{i + 1}</div>
-
-                    {/* details */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <span style={s.reqTitle}>{req.title}</span>
                       <div style={s.reqMeta}>
                         <span style={s.reqTag}>{req.category}</span>
                         <span style={s.reqDot}>·</span>
                         <span style={s.reqPriority}>
-                          Priority:{' '}
-                          <span style={{ color: '#6d28d9', fontWeight: 500 }}>{req.priority}</span>
+                          Priority: <span style={{ color: '#6d28d9', fontWeight: 500 }}>{req.priority}</span>
                         </span>
                       </div>
+                      {/* FIX Issue 2: formatDate includes seconds */}
+                      <div style={s.reqTimestamp}>
+                        <Calendar size={10} style={{ flexShrink: 0 }} />
+                        {formatTimestamp(req.created_at)}
+                      </div>
                     </div>
-
-                    {/* status badge */}
-                    <span style={{
-                      ...s.statusBadge,
-                      background: badge.bg,
-                      color: badge.color,
-                      borderColor: badge.border,
-                    }}>
+                    <span style={{ ...s.statusBadge, background: badge.bg, color: badge.color, borderColor: badge.border }}>
                       {req.status}
                     </span>
                   </div>
@@ -355,206 +441,57 @@ const Dashboard = () => {
   );
 };
 
-/* ─── styles object ──────────────────────────────────────────── */
 const s = {
-  page: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 28,
-  },
-
-  /* banner */
-  banner: {
-    padding: '32px 36px',
-    borderRadius: 16,
-    border: '0.5px solid',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 24,
-    flexWrap: 'wrap',
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  blob: {
-    position: 'absolute', top: -40, right: -30,
-    width: 200, height: 200, borderRadius: '50%',
-    pointerEvents: 'none',
-  },
-  bannerLeft: {
-    display: 'flex', flexDirection: 'column', gap: 10,
-    position: 'relative', zIndex: 1,
-  },
-  rolePill: {
-    display: 'inline-flex', alignItems: 'center', gap: 5,
-    alignSelf: 'flex-start',
-    padding: '3px 10px', borderRadius: 999,
-    fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase',
-    border: '0.5px solid',
-  },
-  bannerTitle: {
-    fontSize: '1.5rem', fontWeight: 800,
-    color: '#1e1b4b', lineHeight: 1.2, letterSpacing: '-0.02em',
-  },
-  bannerSub: {
-    fontSize: '0.85rem', color: '#64748b', lineHeight: 1.6, maxWidth: 440,
-  },
-
-  /* error */
-  errorBox: {
-    padding: '14px 18px', borderRadius: 12,
-    background: '#fef2f2', border: '0.5px solid #fecaca',
-    color: '#b91c1c', fontSize: '0.875rem',
-    display: 'flex', alignItems: 'center', gap: 10,
-  },
-
-  /* stat cards */
-  cardGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(155px, 1fr))',
-    gap: 14,
-  },
-  statCard: {
-    padding: '20px',
-    borderRadius: 12,
-    background: '#ffffff',
-    border: '0.5px solid #e2e8f0',
-    display: 'flex', flexDirection: 'column', gap: 14,
-    transition: 'border-color 0.15s',
-    cursor: 'default',
-  },
-  statHeader: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-  },
-  statLabel: {
-    fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.07em',
-    textTransform: 'uppercase', color: '#94a3b8',
-  },
-  statIconBox: {
-    width: 30, height: 30, borderRadius: 8,
-    border: '0.5px solid',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  statValue: {
-    fontSize: '2rem', fontWeight: 800, lineHeight: 1, letterSpacing: '-0.03em',
-  },
-
-  /* bottom panels */
-  bottomGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-    gap: 20,
-    alignItems: 'start',
-  },
-  panel: {
-    padding: 24,
-    borderRadius: 12,
-    background: '#ffffff',
-    border: '0.5px solid #e2e8f0',
-    display: 'flex', flexDirection: 'column', gap: 0,
-  },
-  panelHeader: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    paddingBottom: 18,
-    borderBottom: '0.5px solid #e2e8f0',
-    marginBottom: 20,
-  },
-  panelTitleGroup: {
-    display: 'flex', alignItems: 'center', gap: 10,
-  },
-  panelIconBox: {
-    width: 32, height: 32, borderRadius: 8,
-    border: '0.5px solid',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  panelTitle: {
-    fontSize: '0.9375rem', fontWeight: 700, color: '#1e293b', lineHeight: 1.2,
-  },
-  panelSub: {
-    fontSize: '0.72rem', color: '#94a3b8',
-  },
-  totalBadge: {
-    padding: '3px 10px', borderRadius: 6,
-    background: '#f5f3ff', border: '0.5px solid #c4b5fd',
-    fontSize: '0.7rem', fontWeight: 500, color: '#6d28d9',
-  },
-  viewAllBtn: {
-    display: 'inline-flex', alignItems: 'center', gap: 4,
-    background: 'none', border: 'none', padding: '5px 8px',
-    borderRadius: 6, cursor: 'pointer',
-    fontSize: '0.75rem', fontWeight: 500, color: '#6d28d9',
-    fontFamily: 'inherit', transition: 'background 0.12s',
-  },
-
-  /* stacked bar */
-  stackedBar: {
-    height: 8, borderRadius: 999, overflow: 'hidden',
-    display: 'flex', background: '#f1f5f9',
-    border: '0.5px solid #e2e8f0',
-    marginBottom: 16,
-  },
-
-  /* legend */
-  legendGrid: {
-    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8,
-  },
-  legendItem: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '9px 12px', borderRadius: 8,
-    background: '#f8fafc', border: '0.5px solid #e2e8f0',
-  },
+  page: { display: 'flex', flexDirection: 'column', gap: 28 },
+  banner: { padding: '32px 36px', borderRadius: 16, border: '0.5px solid', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap', position: 'relative', overflow: 'hidden' },
+  blob: { position: 'absolute', top: -40, right: -30, width: 200, height: 200, borderRadius: '50%', pointerEvents: 'none' },
+  bannerLeft: { display: 'flex', flexDirection: 'column', gap: 10, position: 'relative', zIndex: 1 },
+  rolePill: { display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start', padding: '3px 10px', borderRadius: 999, fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', border: '0.5px solid' },
+  bannerTitle: { fontSize: '1.5rem', fontWeight: 800, color: '#1e1b4b', lineHeight: 1.2, letterSpacing: '-0.02em' },
+  bannerSub: { fontSize: '0.85rem', color: '#64748b', lineHeight: 1.6, maxWidth: 440 },
+  errorBox: { padding: '14px 18px', borderRadius: 12, background: '#fef2f2', border: '0.5px solid #fecaca', color: '#b91c1c', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: 10 },
+  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(155px, 1fr))', gap: 14 },
+  statCard: { padding: '20px', borderRadius: 12, background: '#ffffff', border: '0.5px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: 14, transition: 'border-color 0.15s', cursor: 'default' },
+  statHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
+  statLabel: { fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#94a3b8' },
+  statIconBox: { width: 30, height: 30, borderRadius: 8, border: '0.5px solid', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  statValue: { fontSize: '2rem', fontWeight: 800, lineHeight: 1, letterSpacing: '-0.03em' },
+  bottomGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20, alignItems: 'start' },
+  panel: { padding: 24, borderRadius: 12, background: '#ffffff', border: '0.5px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: 0 },
+  panelHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 18, borderBottom: '0.5px solid #e2e8f0', marginBottom: 20 },
+  panelTitleGroup: { display: 'flex', alignItems: 'center', gap: 10 },
+  panelIconBox: { width: 32, height: 32, borderRadius: 8, border: '0.5px solid', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  panelTitle: { fontSize: '0.9375rem', fontWeight: 700, color: '#1e293b', lineHeight: 1.2 },
+  panelSub: { fontSize: '0.72rem', color: '#94a3b8' },
+  totalBadge: { padding: '3px 10px', borderRadius: 6, background: '#f5f3ff', border: '0.5px solid #c4b5fd', fontSize: '0.7rem', fontWeight: 500, color: '#6d28d9' },
+  viewAllBtn: { display: 'inline-flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', padding: '5px 8px', borderRadius: 6, cursor: 'pointer', fontSize: '0.75rem', fontWeight: 500, color: '#6d28d9', fontFamily: 'inherit', transition: 'background 0.12s' },
+  stackedBar: { height: 8, borderRadius: 999, overflow: 'hidden', display: 'flex', background: '#f1f5f9', border: '0.5px solid #e2e8f0', marginBottom: 16 },
+  legendGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 },
+  legendItem: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 12px', borderRadius: 8, background: '#f8fafc', border: '0.5px solid #e2e8f0' },
   legendLeft: { display: 'flex', alignItems: 'center', gap: 8 },
   legendDot: { width: 7, height: 7, borderRadius: 2, flexShrink: 0 },
   legendName: { fontSize: '0.72rem', color: '#64748b', fontWeight: 500 },
   legendPct: { fontSize: '0.78rem', fontWeight: 500, color: '#1e293b' },
-
-  /* empty state */
-  emptyState: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    justifyContent: 'center', padding: '40px 20px', gap: 10,
-    color: '#94a3b8', textAlign: 'center',
-  },
+  emptyState: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px', gap: 10, color: '#94a3b8', textAlign: 'center' },
   emptyPrimary: { fontSize: '0.875rem', fontWeight: 500, color: '#64748b' },
   emptySub: { fontSize: '0.75rem', color: '#94a3b8' },
-  emptyAction: {
-    marginTop: 4, padding: '8px 16px', borderRadius: 8,
-    background: '#f5f3ff', border: '0.5px solid #c4b5fd',
-    color: '#6d28d9', fontSize: '0.8rem', fontWeight: 500,
-    cursor: 'pointer', fontFamily: 'inherit',
-  },
-
-  /* request items */
-  reqItem: {
-    padding: '13px 14px', borderRadius: 10,
-    background: '#f8fafc', border: '0.5px solid #e2e8f0',
-    cursor: 'pointer',
-    display: 'flex', alignItems: 'center', gap: 12,
-    transition: 'background 0.12s, border-color 0.12s',
-  },
-  reqNum: {
-    width: 26, height: 26, borderRadius: 7, flexShrink: 0,
-    background: '#ede9fe',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: '0.65rem', fontWeight: 700, color: '#6d28d9',
-  },
-  reqTitle: {
-    fontSize: '0.8rem', fontWeight: 500, color: '#1e293b',
-    display: 'block',
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  },
+  emptyAction: { marginTop: 4, padding: '8px 16px', borderRadius: 8, background: '#f5f3ff', border: '0.5px solid #c4b5fd', color: '#6d28d9', fontSize: '0.8rem', fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' },
+  reqItem: { padding: '13px 14px', borderRadius: 10, background: '#f8fafc', border: '0.5px solid #e2e8f0', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, transition: 'background 0.12s, border-color 0.12s' },
+  reqNum: { width: 26, height: 26, borderRadius: 7, flexShrink: 0, background: '#ede9fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', fontWeight: 700, color: '#6d28d9' },
+  reqTitle: { fontSize: '0.8rem', fontWeight: 500, color: '#1e293b', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   reqMeta: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 },
-  reqTag: {
-    fontSize: '0.67rem', color: '#64748b', fontWeight: 500,
-    padding: '1px 6px', borderRadius: 4,
-    background: '#f1f5f9', border: '0.5px solid #e2e8f0',
-  },
+  reqTag: { fontSize: '0.67rem', color: '#64748b', fontWeight: 500, padding: '1px 6px', borderRadius: 4, background: '#f1f5f9', border: '0.5px solid #e2e8f0' },
   reqDot: { fontSize: '0.67rem', color: '#cbd5e1' },
   reqPriority: { fontSize: '0.67rem', color: '#94a3b8' },
-  statusBadge: {
-    padding: '3px 9px', borderRadius: 999,
-    fontSize: '0.67rem', fontWeight: 500,
-    border: '0.5px solid', whiteSpace: 'nowrap', flexShrink: 0,
-  },
+  reqTimestamp: { display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.65rem', color: '#94a3b8', marginTop: 4 },
+  statusBadge: { padding: '3px 9px', borderRadius: 999, fontSize: '0.67rem', fontWeight: 500, border: '0.5px solid', whiteSpace: 'nowrap', flexShrink: 0 },
+  reminderRow: { display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderRadius: 10, background: '#fef2f2', border: '0.5px solid #fecaca', cursor: 'pointer', transition: 'background 0.12s, border-color 0.12s' },
+  reminderHeaderCell: { flex: 1, fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#cbd5e1' },
+  reminderIcon: { width: 26, height: 26, borderRadius: 7, flexShrink: 0, background: '#fffbeb', border: '0.5px solid #fde68a', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  reminderTitle: { fontSize: '0.8rem', fontWeight: 600, color: '#1e293b', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  reminderSub: { fontSize: '0.67rem', color: '#94a3b8', display: 'block' },
+  reminderBadge: { padding: '3px 9px', borderRadius: 999, fontSize: '0.67rem', fontWeight: 500, border: '0.5px solid', whiteSpace: 'nowrap', flexShrink: 0 },
+  actBtn: { display: 'flex', alignItems: 'center', gap: 4, padding: '5px 10px', borderRadius: 7, background: '#fff', border: '0.5px solid #e2e8f0', color: '#6d28d9', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' },
 };
 
 export default Dashboard;
